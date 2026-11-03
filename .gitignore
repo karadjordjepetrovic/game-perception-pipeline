@@ -18,3 +18,4 @@ outputs/
 *.engine
 *.nsys-rep
 *.sqlite
+.pytest_cache/

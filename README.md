@@ -28,7 +28,30 @@ video ──decode once (background thread)──► frame
 
 ## Results
 
-_Coming next: per-stage and whole-pipeline timing on Modern Warfare 2 and Modern Warfare 3 footage._
+Clip: 41 s of Call of Duty: Modern Warfare 2 campaign, 1920×1080, 60 fps, 2,458 frames (recorded from the retail game, not committed). RTX 3070, first 20 frames left out.
+
+| Stage | What runs | Median | p95 | Runs on |
+| --- | --- | --- | --- | --- |
+| Depth | Depth Anything V2 Small, FP16 + channels_last + CUDA Graph, incl. GPU preprocessing and copy back | 8.37 ms | 8.70 ms | every frame |
+| Objects | YOLO11m TensorRT FP16 + ByteTrack | 8.88 ms | 10.85 ms | every frame |
+| **Depth + objects per frame** | | **17.25 ms** | 19.32 ms | **57.7 FPS** wall clock |
+| Text | PaddleOCR on GPU + HUD/in-world classification, own process | 216 ms (mean) | | every 12th frame (5 per second) |
+
+Text on this clip: 1,231 regions found; of 970 above 0.8 confidence, 438 HUD, 276 in-world, 256 unknown.
+
+**What the measurements showed**
+
+- **Depth costs 1.5 ms more in the pipeline than alone** (8.37 vs 6.86 ms): preprocessing the 1080p frame on the GPU and copying the depth map back to the CPU.
+- **Waiting for the GPU between stages costs nothing measurable:** without it (`--no-sync`) the pipeline ran at 56.3 FPS, within run-to-run noise. Both stages already wait for the GPU themselves (the depth copy-back, the tracker), so they run one after another, not overlapped.
+- **Drawing and encoding the overlay video costs more than perception:** with it (`run`), 23 FPS. Benchmarks use `bench`, which writes no video.
+- **OCR is the slowest stage by far** (216 ms here, 172 ms on a clip with less text), so it runs at a lower rate and its last result is held in between.
+
+**Next steps**
+
+1. Overlap depth and objects: separate CUDA streams or threads, and keep the depth map on the GPU.
+2. Run OCR in a background worker in real time instead of ahead of time.
+3. Move the overlay drawing off the main thread.
+4. INT8 and a mobile chip's NPU, for running on a device.
 
 ## Setup (Windows, NVIDIA GPU)
 

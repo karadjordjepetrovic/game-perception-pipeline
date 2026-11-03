@@ -1,0 +1,7 @@
+# GPU install (NVIDIA, CUDA 12.6 build of PaddlePaddle).
+# Usage: pip install -r requirements-gpu.txt
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddlepaddle-gpu==3.2.0
+paddleocr
+opencv-python
+numpy

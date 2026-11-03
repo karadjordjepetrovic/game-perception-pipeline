@@ -28,7 +28,7 @@ video ──decode once (background thread)──► frame
 
 ## Results
 
-Clip: 41 s of Call of Duty: Modern Warfare 2 campaign, 1920×1080, 60 fps, 2,458 frames (recorded from the retail game, not committed). RTX 3070, first 20 frames left out.
+First clip: 41 s of Call of Duty: Modern Warfare 2 campaign, 1920×1080, 60 fps, 2,458 frames (recorded from the retail game, not committed). RTX 3070, first 20 frames left out.
 
 | Stage | What runs | Median | p95 | Runs on |
 | --- | --- | --- | --- | --- |
@@ -38,6 +38,16 @@ Clip: 41 s of Call of Duty: Modern Warfare 2 campaign, 1920×1080, 60 fps, 2,458
 | Text | PaddleOCR on GPU + HUD/in-world classification, own process | 216 ms (mean) | | every 12th frame (5 per second) |
 
 Text on this clip: 1,231 regions found; of 970 above 0.8 confidence, 438 HUD, 276 in-world, 256 unknown.
+
+Second clip: 73 s of Call of Duty: Modern Warfare 3, 1920×1080, recorded at a variable frame rate and converted to a constant 30 fps (2,192 frames), so text runs every 6th frame.
+
+| Stage | Median | p95 | Runs on |
+| --- | --- | --- | --- |
+| Depth | 8.34 ms | 8.50 ms | every frame |
+| Objects | 7.17 ms | 9.26 ms | every frame |
+| **Depth + objects per frame** | **15.54 ms** | 17.80 ms | **62.6 FPS** wall clock |
+
+Text on this clip: 1,372 regions found; of 1,134 above 0.8 confidence, 448 HUD, 322 in-world, 364 unknown.
 
 **What the measurements showed**
 

@@ -1,0 +1,11 @@
+run,reference,fps,precision,recall,f1,idf1,id_switches
+nano,reference,48.31,0.792,0.397,0.529,0.425,64
+nano_1280,reference,50.04,0.862,0.593,0.703,0.625,54
+small,reference,55.5,0.865,0.603,0.711,0.599,69
+medium,reference,47.3,0.936,0.716,0.811,0.734,66
+medium_trt_fp16,reference,92.99,0.937,0.705,0.804,0.737,56
+trt_threaded,reference,127.89,0.937,0.705,0.804,0.737,56
+trt_nms_threaded,reference,118.83,0.949,0.675,0.789,0.690,70
+trt_threaded,reference,126.5,0.934,0.708,0.806,0.736,56
+trt_gpuprep,reference,87.94,0.934,0.708,0.806,0.736,56
+trt_gpuprep_threaded,reference,126.7,0.934,0.708,0.806,0.736,56

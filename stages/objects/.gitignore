@@ -1,0 +1,32 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Data: clips, frames and datasets stay local (large, game footage).
+# Ground truth labels are small text files and worth committing.
+data/*
+!data/gt/
+
+# Generated output
+outputs/
+runs/
+*.nsys-rep
+*.sqlite
+
+# Model weights and compiled engines
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# External tools cloned separately
+TrackEval/
+eval/trackers/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

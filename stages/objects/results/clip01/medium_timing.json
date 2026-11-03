@@ -1,0 +1,18 @@
+{
+  "clip": "clip01",
+  "tag": "medium",
+  "model": "yolo11m.pt",
+  "tracker": "bytetrack.yaml",
+  "imgsz": 640,
+  "frames": 2458,
+  "timed_frames": 2438,
+  "ms_per_frame": {
+    "decode": 2.992,
+    "preprocess": 1.092,
+    "inference": 13.85,
+    "postprocess": 1.667,
+    "tracker": 1.538
+  },
+  "total_ms": 21.139,
+  "fps": 47.3
+}

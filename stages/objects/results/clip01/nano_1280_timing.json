@@ -1,0 +1,18 @@
+{
+  "clip": "clip01",
+  "tag": "nano_1280",
+  "model": "yolo11n.pt",
+  "tracker": "bytetrack.yaml",
+  "imgsz": 1280,
+  "frames": 2458,
+  "timed_frames": 2438,
+  "ms_per_frame": {
+    "decode": 2.985,
+    "preprocess": 3.585,
+    "inference": 10.356,
+    "postprocess": 1.601,
+    "tracker": 1.459
+  },
+  "total_ms": 19.985,
+  "fps": 50.04
+}

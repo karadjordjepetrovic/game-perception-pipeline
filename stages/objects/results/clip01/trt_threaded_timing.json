@@ -1,0 +1,22 @@
+{
+  "clip": "clip01",
+  "tag": "trt_threaded",
+  "model": "yolo11m_fp16.engine",
+  "tracker": "bytetrack.yaml",
+  "imgsz": 640,
+  "threaded_decode": true,
+  "gpu_preprocess": false,
+  "frames": 2458,
+  "timed_frames": 2438,
+  "ms_per_frame": {
+    "decode": 0.017,
+    "gpu_prep": 0.0,
+    "preprocess": 1.568,
+    "inference": 2.886,
+    "postprocess": 1.743,
+    "tracker": 1.478
+  },
+  "stage_sum_ms": 7.693,
+  "wall_ms": 7.905,
+  "fps": 126.5
+}

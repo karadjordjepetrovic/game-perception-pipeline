@@ -1,0 +1,20 @@
+{
+  "clip": "clip01",
+  "tag": "trt_nms_threaded",
+  "model": "yolo11m_nms.engine",
+  "tracker": "bytetrack.yaml",
+  "imgsz": 640,
+  "threaded_decode": true,
+  "frames": 2458,
+  "timed_frames": 2438,
+  "ms_per_frame": {
+    "decode": 0.017,
+    "preprocess": 1.592,
+    "inference": 4.459,
+    "postprocess": 0.728,
+    "tracker": 1.425
+  },
+  "stage_sum_ms": 8.222,
+  "wall_ms": 8.416,
+  "fps": 118.83
+}

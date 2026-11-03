@@ -1,0 +1,20 @@
+{
+  "clip": "clip01",
+  "tag": "trt_seq",
+  "model": "yolo11m.engine",
+  "tracker": "bytetrack.yaml",
+  "imgsz": 640,
+  "threaded_decode": false,
+  "frames": 2458,
+  "timed_frames": 2438,
+  "ms_per_frame": {
+    "decode": 2.539,
+    "preprocess": 1.317,
+    "inference": 3.627,
+    "postprocess": 1.7,
+    "tracker": 1.481
+  },
+  "stage_sum_ms": 10.665,
+  "wall_ms": 10.866,
+  "fps": 92.03
+}

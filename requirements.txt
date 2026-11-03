@@ -1,0 +1,10 @@
+# Pipeline environment (depth + objects run in this process). Install PyTorch with CUDA first:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# The text stage (PaddleOCR) runs in its own environment: see stages/text/README.md.
+transformers
+ultralytics
+lap
+tensorrt-cu12
+opencv-python
+numpy
+pytest

@@ -20,16 +20,9 @@ def depth_to_colour(depth, size):
 
 
 def draw(frame, results, inset_scale=0.3):
-    """Return a copy of frame with depth (inset, top right), text and object boxes drawn."""
+    """Return a copy of frame with text and object boxes, and the depth map as an inset (top right)."""
     out = frame.copy()
     h, w = out.shape[:2]
-
-    depth = results.get("depth")
-    if depth is not None:
-        iw, ih = int(w * inset_scale), int(h * inset_scale)
-        out[8:8 + ih, w - iw - 8:w - 8] = depth_to_colour(depth, (iw, ih))
-        cv2.rectangle(out, (w - iw - 8, 8), (w - 8, 8 + ih), (255, 255, 255), 2)
-        cv2.putText(out, "depth", (w - iw, 8 + ih - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
     for det in results.get("text") or []:
         x1, y1, x2, y2 = (int(v) for v in det["box"])
@@ -42,6 +35,14 @@ def draw(frame, results, inset_scale=0.3):
         colour = _id_colour(obj["id"])
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
         cv2.putText(out, f"#{obj['id']}", (x1, max(16, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2)
+
+    # depth inset last, so boxes never draw over it
+    depth = results.get("depth")
+    if depth is not None:
+        iw, ih = int(w * inset_scale), int(h * inset_scale)
+        out[8:8 + ih, w - iw - 8:w - 8] = depth_to_colour(depth, (iw, ih))
+        cv2.rectangle(out, (w - iw - 8, 8), (w - 8, 8 + ih), (255, 255, 255), 2)
+        cv2.putText(out, "depth", (w - iw, 8 + ih - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
     return out
 

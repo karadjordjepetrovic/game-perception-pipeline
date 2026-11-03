@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Footage and generated output stay local (size and copyright)
+footage/
+outputs/
+*.mp4
+*.mkv
+*.avi
+
+# Model weights and engines
+*.pt
+*.pth
+*.onnx
+*.engine
+*.nsys-rep
+*.sqlite

@@ -4,13 +4,17 @@ Best configuration there: YOLO11m as a TensorRT FP16 engine at 640 px, 126.5 FPS
 threaded decode (stages/objects/README). The engine file is built on your machine and
 is not in git; pass a .pt file to run PyTorch instead.
 """
+from pathlib import Path
+
 from ..stage import Stage
+
+DEFAULT_TRACKER = str(Path(__file__).with_name("bytetrack_gpp.yaml"))
 
 
 class ObjectStage(Stage):
     name = "objects"
 
-    def __init__(self, model="yolo11m_fp16.engine", imgsz=640, classes=(0,), tracker="bytetrack.yaml", every_n=1):
+    def __init__(self, model="yolo11m_fp16.engine", imgsz=640, classes=(0,), tracker=DEFAULT_TRACKER, every_n=1):
         self.model_path = model
         self.imgsz = imgsz
         self.classes = list(classes) if classes else None

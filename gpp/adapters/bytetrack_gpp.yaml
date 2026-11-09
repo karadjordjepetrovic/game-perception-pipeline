@@ -1,0 +1,11 @@
+# ByteTrack for the pipeline: Ultralytics' default bytetrack.yaml with a longer track buffer.
+# Game characters drop out of detection for a few frames at a time (occlusion, muzzle flash,
+# motion blur). With the default 30 frames (1 s at 30 fps) many came back under a new ID,
+# which the decision agent sees as a lost target plus a new one.
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 60
+match_thresh: 0.8
+fuse_score: True

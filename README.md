@@ -105,6 +105,8 @@ stage results ──► WorldBuilder (gpp/world.py) ──► state machine (gpp
 - **Target choice** (`--target-policy`): `closest` (default) picks the nearest foe and only switches to one at least 20% closer; `score` mixes closeness, distance from the crosshair and stickiness.
 - **Aim** (`--aim`): `smooth` (default) turns gradually and fires once on target, for driving a real game; `snap` turns the whole error and shoots in the same tick ("shoot #126 at (1012, 488)"), which suits recorded footage where the crosshair never follows the agent. Every ENGAGE action logs the target's screen point and angle (`"aim": {"px": [...], "deg": [...]}`). During short detection gaps the agent keeps aiming at the last position.
 - **Camera motion** (`motion` stage, added automatically with `--agent`): phase correlation between consecutive frames, on a band that skips the HUD and the weapon, gives how far the view turned (~1.5 ms, CPU). Remembered targets are moved by that turn each frame, so a lost NPC's position (the ring on the overlay) stays where the NPC was instead of freezing on the screen, and SEARCH turns toward it.
+- **NPC movement**: each target's world angular velocity (its screen movement plus the camera's turn, smoothed). A lost NPC keeps moving the way it was for up to 0.5 s, and the agent leads moving targets by 0.05 s (`lead_s`; no lead below 10°/s, which is mostly box jitter).
+- **Hits and health** (`health` stage, added with `--agent`): red pixels at the screen edges (CoD's damage tint) and in a ring around the crosshair (hit-direction arcs), each minus the red elsewhere in the frame, so red scenes cancel out; the crosshair centre is ignored because a red-dot sight is always red. ~2 ms on every 2nd frame. Any hit sends the agent to RECOVER (back off, no shooting) for 2 s after the last hit (`recover_on_hit`, `recover_s`); low health (< 30%) also does, until it's back above 60%.
 
 ```powershell
 python -m gpp run footage/mw2.mp4 --stages depth,objects,text --text-csv stages/text/outputs/hud/classified.csv --text-step 12 --agent --tag agent
@@ -125,6 +127,7 @@ gpp/               pipeline: video input, Stage interface, timing, report, overl
 gpp/adapters/      one wrapper per stage
 gpp/world.py       WorldState: targets, memory, ammo, free space, from the stage results
 gpp/adapters/motion.py  camera motion (yaw/pitch per frame)
+gpp/adapters/health.py  health from the red damage vignette
 gpp/agent/         decision agent: state machine, actions, JSONL log
 stages/            the three projects (git subtree)
 tests/             pipeline tests with dummy stages, no GPU needed

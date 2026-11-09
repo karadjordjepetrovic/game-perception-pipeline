@@ -2,7 +2,7 @@
 
 Top level, highest priority first:
 
-    RECOVER   health low: back off, no shooting            (needs a health stage; idle until then)
+    RECOVER   hit (or health low): back off, no shooting   (needs the health stage)
     RELOAD    magazine empty, or low with no close threat  (runs for reload_s once started)
     ENGAGE    a confirmed foe is visible
       ├─ APPROACH  target far: move toward it, keep the aim roughly on it
@@ -29,6 +29,10 @@ Aim (aim_mode):
   errors above max_snap_deg are turned smoothly first. Fits recorded footage, where the
   crosshair never follows the agent and smooth aim would almost never reach FIRE
 Every ENGAGE action carries the target's screen point and angle offset (aim_px, aim_deg).
+
+Lead (lead_s): the agent aims where a moving target will be lead_s from now, using its
+world angular velocity from gpp.world (minus nothing for the camera: the aim is relative to
+the crosshair now). Off for targets whose velocity isn't trusted yet.
 
 Short detection gaps (< lost_grace_s): the agent keeps aiming at the target's last position
 and keeps the current burst going, instead of freezing.
@@ -71,13 +75,19 @@ class AgentConfig:
     low_ammo: int = 5
     ammo_ignore_s: float = 1.0       # after a reload, ignore ammo readings this long (HUD/OCR lag)
     blocked_threshold: float = 0.85  # EXPLORE turns when the path ahead is closer than this (0..1)
-    low_health: float = 0.3
+    recover_on_hit: bool = True      # RECOVER as soon as the player is hit ...
+    recover_s: float = 2.0           # ... for this long after the last hit
+    low_health: float = 0.3          # also RECOVER below this health ...
+    recover_until: float = 0.6       # ... until it is back above this
     explore_turn_dps: float = 90.0
     search_overshoot_deg: float = 10.0
     target_policy: str = "closest"   # "closest" or "score"
     switch_margin: float = 0.2       # closest: switch only to a foe this much closer than the current one
     aim_mode: str = "smooth"         # "smooth" or "snap"
     max_snap_deg: float = 45.0       # snap: larger errors are turned smoothly first
+    lead_s: float = 0.05             # aim this far ahead of a moving target (0 = no lead)
+    min_rate_samples: int = 3        # velocity needs this many frames before it is used for lead
+    min_lead_dps: float = 10.0       # slower readings are mostly box jitter: no lead
     w_close: float = 1.0             # "score" policy weights
     w_centre: float = 1.0
     w_sticky: float = 0.5
@@ -141,6 +151,11 @@ class FpsStateMachine:
 
         return max(foes, key=score)
 
+    def to_screen(self, w, yaw, pitch):
+        """Degrees from the crosshair -> pixel (same pinhole camera as gpp.world)."""
+        fx = (w.width / 2) / math.tan(math.radians(self.hfov) / 2)
+        return (w.width / 2 + fx * math.tan(math.radians(yaw)), w.height / 2 - fx * math.tan(math.radians(pitch)))
+
     def burst(self):
         """Fire / pause cycle while on target."""
         c = self.cfg
@@ -152,8 +167,13 @@ class FpsStateMachine:
     def desired_mode(self, w: WorldState):
         c = self.cfg
         foes = w.visible_foes(self.assume_foe)
-        if w.me.health is not None and w.me.health <= c.low_health:
-            return RECOVER, f"health {w.me.health:.0%} <= {c.low_health:.0%}"
+        hp = w.me.health
+        if c.recover_on_hit and w.me.last_hit is not None and w.t - w.me.last_hit < c.recover_s:
+            ago = w.t - w.me.last_hit
+            return RECOVER, f"hit {ago * 1000:.0f} ms ago" + (f", health {hp:.0%}" if hp is not None else "")
+        if hp is not None and (hp <= c.low_health or (self.mode == RECOVER and hp < c.recover_until)):
+            limit = c.low_health if self.mode != RECOVER else c.recover_until
+            return RECOVER, f"health {hp:.0%} {'<=' if self.mode != RECOVER else '<'} {limit:.0%}"
         if w.t < self.reload_until:
             return RELOAD, "reloading"
         ammo = w.me.ammo
@@ -209,7 +229,12 @@ class FpsStateMachine:
         strafe = 0.0
         if b:
             strafe = -1.0 if b.get("left", 1) < b.get("right", 1) else 1.0
-        return Action(forward=-1.0, strafe=strafe), None, "backing off to recover"
+        if w.me.last_hit is not None and w.t - w.me.last_hit < self.cfg.recover_s:
+            hp = f"hit {(w.t - w.me.last_hit) * 1000:.0f} ms ago"
+        else:
+            hp = f"health {w.me.health:.0%}" if w.me.health is not None else "low health"
+        side = "" if not strafe else (" and strafing left" if strafe < 0 else " and strafing right")
+        return Action(forward=-1.0, strafe=strafe), None, f"{hp}: backing off{side} to recover"
 
     def reload(self, w):
         starting = self.frames_in_mode == 1
@@ -230,14 +255,22 @@ class FpsStateMachine:
         if target.id != self.target_id and self.target_id is not None:
             self.fire_phase_t = 0.0
         self.target_id = target.id
-        err = math.hypot(target.yaw_err, target.pitch_err)
+        lead_yaw = lead_pitch = 0.0
+        if (c.lead_s > 0 and target.rate_samples >= c.min_rate_samples
+                and math.hypot(target.yaw_rate, target.pitch_rate) >= c.min_lead_dps):
+            lead_yaw, lead_pitch = target.yaw_rate * c.lead_s, target.pitch_rate * c.lead_s
+        aim_yaw, aim_pitch = target.yaw_err + lead_yaw, target.pitch_err + lead_pitch
+        err = math.hypot(aim_yaw, aim_pitch)
         tol = self.aim_tolerance(target)
-        side = "right" if target.yaw_err > 0 else "left"
-        vert = "up" if target.pitch_err > 0 else "down"
         desc = f"#{target.id} {target.range} ~{target.distance_m:.0f}m"
-        where = f"({target.aim[0]:.0f}, {target.aim[1]:.0f}), {abs(target.yaw_err):.1f}° {side} {abs(target.pitch_err):.1f}° {vert}"
-        aim = dict(aim_px=target.aim, aim_deg=(target.yaw_err, target.pitch_err))
-        yaw, pitch = self.look(target.yaw_err, target.pitch_err)
+        side = "right" if aim_yaw > 0 else "left"
+        vert = "up" if aim_pitch > 0 else "down"
+        px = self.to_screen(w, aim_yaw, aim_pitch)
+        where = f"({px[0]:.0f}, {px[1]:.0f}), {abs(aim_yaw):.1f}° {side} {abs(aim_pitch):.1f}° {vert}"
+        if abs(lead_yaw) >= 0.1 or abs(lead_pitch) >= 0.1:
+            where += f", lead {lead_yaw:+.1f}°"
+        aim = dict(aim_px=px, aim_deg=(aim_yaw, aim_pitch))
+        yaw, pitch = self.look(aim_yaw, aim_pitch)
 
         if target.range == FAR and not c.fire_at_far:
             self.sub = APPROACH
@@ -247,7 +280,7 @@ class FpsStateMachine:
             if self.sub != FIRE:
                 self.sub, self.fire_phase_t = FIRE, 0.0
             firing = self.burst()
-            return (Action(yaw=target.yaw_err, pitch=target.pitch_err, ads=True, fire=firing, **aim), target.id,
+            return (Action(yaw=aim_yaw, pitch=aim_pitch, ads=True, fire=firing, **aim), target.id,
                     f"{'shoot' if firing else 'burst pause,'} {desc} at {where}")
 
         on_target = err <= tol * (c.exit_factor if self.sub == FIRE else 1.0)

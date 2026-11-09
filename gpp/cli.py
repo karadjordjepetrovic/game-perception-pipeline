@@ -24,6 +24,8 @@ def build_stages(args):
     names = [s.strip() for s in args.stages.split(",") if s.strip()]
     if getattr(args, "agent", False) and "motion" not in names:
         names.append("motion")  # the agent uses camera motion to keep lost targets in place
+    if getattr(args, "agent", False) and "health" not in names:
+        names.append("health")  # and health for RECOVER
     for name in names:
         if name == "depth":
             from .adapters.depth import DepthStage
@@ -37,13 +39,16 @@ def build_stages(args):
         elif name == "motion":
             from .adapters.motion import MotionStage
             stages.append(MotionStage(hfov_deg=args.hfov))
+        elif name == "health":
+            from .adapters.health import HealthStage
+            stages.append(HealthStage(full_damage=args.health_full_damage))
         elif name == "text":
             if not args.text_csv:
                 raise SystemExit("--stages text needs --text-csv (classified.csv from stages/text)")
             from .adapters.text import TextStage
             stages.append(TextStage(args.text_csv, step=args.text_step))
         else:
-            raise SystemExit(f"unknown stage: {name} (choose from depth, objects, text, motion)")
+            raise SystemExit(f"unknown stage: {name} (choose from depth, objects, text, motion, health)")
     return stages
 
 
@@ -61,7 +66,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="gpp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("command", choices=["bench", "run"])
     p.add_argument("video")
-    p.add_argument("--stages", default="depth,objects", help="comma-separated: depth, objects, text, motion (--agent adds motion)")
+    p.add_argument("--stages", default="depth,objects", help="comma-separated: depth, objects, text, motion, health (--agent adds motion and health)")
     p.add_argument("--tag", default="default", help="name for this run in outputs/")
     p.add_argument("--warmup", type=int, default=20, help="first N frames left out of the timing")
     p.add_argument("--max-frames", type=int, default=None)
@@ -86,6 +91,8 @@ def main(argv=None):
                    help="smooth: turn gradually, fire when on target; snap: turn and shoot at the target in one tick")
     p.add_argument("--target-policy", choices=("closest", "score"), default="closest")
     p.add_argument("--no-depth-distance", action="store_true", help="distance from box height only")
+    p.add_argument("--health-full-damage", type=float, default=0.06,
+                   help="red-edge share (ring minus centre) that counts as no health left")
     # text
     p.add_argument("--text-csv", default=None)
     p.add_argument("--text-step", type=int, default=12, help="video frames between OCR frames")

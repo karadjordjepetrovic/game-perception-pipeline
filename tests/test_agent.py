@@ -130,7 +130,7 @@ def test_acquire_then_fire():
 
 
 def test_fire_hysteresis_and_bursts():
-    agent = make_agent()
+    agent = make_agent(lead_s=0.0)  # the test's sudden jump would read as movement
     feed(agent, [{"objects": [person(1, 6.0)]}] * 4)
     tol = agent.fsm.aim_tolerance(agent.builder.tracks[1])
     # just above the entry tolerance but below exit: stays in FIRE
@@ -407,3 +407,144 @@ def test_search_turns_toward_followed_target_and_stops_on_it():
     search = [x for x in d if x.state == "SEARCH"]
     assert search and "watching" in search[-1].reason          # then watches that spot
     assert abs(agent.builder.tracks[1].yaw_err) <= 2.0
+
+
+# --- NPC movement: velocity, carrying lost targets forward, lead --------------------------------
+def moving(builder_or_agent, frames, rate_dps=30.0, start_yaw=-10.0, camera_dps=0.0, start=0):
+    """Feed a target moving right at rate_dps (world) while the camera turns right at camera_dps."""
+    out = []
+    for i in range(frames):
+        t = (start + i) / FPS
+        on_screen = start_yaw + (rate_dps - camera_dps) * t
+        r = {"objects": [person(1, 8.0, yaw_deg=on_screen)], "motion": {"yaw": camera_dps / FPS, "pitch": 0.0, "valid": True}}
+        out.append(builder_or_agent.update(start + i, r) if isinstance(builder_or_agent, WorldBuilder)
+                   else builder_or_agent.process(start + i, r)["decision"])
+    return out
+
+
+def test_velocity_is_world_motion_not_screen_motion():
+    b = WorldBuilder(W, H, FPS)
+    world = moving(b, 30, rate_dps=30.0, camera_dps=20.0)[-1]   # on screen only 10°/s
+    assert world.targets[0].yaw_rate == pytest.approx(30.0, abs=1.0)
+    assert world.targets[0].rate_samples >= 3
+
+
+def test_lost_target_keeps_moving_for_a_while():
+    b = WorldBuilder(W, H, FPS)
+    world = moving(b, 30, rate_dps=30.0)[-1]
+    last = world.targets[0].yaw_err
+    still = {"yaw": 0.0, "pitch": 0.0, "valid": True}
+    for i in range(30, 30 + FPS):  # gone for 1 s, camera still
+        world = b.update(i, {"objects": [], "motion": still})
+        if i == 30 + FPS // 4 - 1:
+            assert world.targets[0].yaw_err == pytest.approx(last + 30.0 * 0.25, abs=0.6)
+    assert world.targets[0].yaw_err == pytest.approx(last + 30.0 * 0.5, abs=0.6)  # stops after predict_s
+
+
+def test_lead_aims_ahead_of_moving_target():
+    agent = make_agent(aim_mode="snap", lead_s=0.1)
+    d = moving(agent, 30, rate_dps=30.0, start_yaw=-1.0)
+    track = agent.builder.tracks[1]
+    assert d[-1].action.yaw == pytest.approx(track.yaw_err + 3.0, abs=0.3)  # 30°/s x 0.1 s ahead
+    assert "lead +3.0°" in d[-1].reason
+
+
+def test_no_lead_for_still_target():
+    agent = make_agent(aim_mode="snap", lead_s=0.1)
+    d = feed(agent, [{"objects": [person(1, 8.0, yaw_deg=4.0)]}] * 10)
+    assert d[-1].action.yaw == pytest.approx(4.0, abs=0.05) and "lead" not in d[-1].reason
+
+
+# --- health from the damage vignette -----------------------------------------------------------
+def scene(edge_red=0.0, centre_red=0.0, size=(270, 480)):
+    """A grey frame with a share of red pixels at the edges and in the centre (1080p)."""
+    h, w = size
+    img = np.full((h, w, 3), 90, dtype=np.uint8)
+    rng = np.random.default_rng(1)
+    ring = np.ones((h, w), bool)
+    ring[int(.15 * h):int(.85 * h), int(.15 * w):int(.85 * w)] = False
+    for mask, share in ((ring, edge_red), (~ring, centre_red)):
+        pick = mask & (rng.random((h, w)) < share)
+        img[pick] = (20, 20, 200)
+    return cv2.resize(img, (W, H), interpolation=cv2.INTER_NEAREST)
+
+
+def health_stage(**kw):
+    from gpp.adapters.health import HealthStage
+    s = HealthStage(**kw)
+    s.setup(INFO)
+    return s
+
+
+def test_health_drops_on_red_edges_not_on_red_scene():
+    s = health_stage()
+    quiet = s.process(0, scene())
+    assert quiet["health"] == pytest.approx(1.0) and not quiet["hit"]
+    hit = s.process(2, scene(edge_red=0.05))
+    assert hit["hit"] and hit["damage"] == pytest.approx((0.05 - 0.004) / 0.06, abs=0.06) and hit["health"] < 0.3
+    s2 = health_stage()
+    red_room = s2.process(0, scene(edge_red=0.3, centre_red=0.3))   # red everywhere: a red scene
+    assert red_room["health"] == pytest.approx(1.0) and not red_room["hit"]
+
+
+def arcs(share, dot=True):
+    """Grey 1080p frame with red pixels in the annulus around the crosshair, plus a red-dot sight."""
+    h, w = 270, 480
+    img = np.full((h, w, 3), 90, dtype=np.uint8)
+    yy, xx = np.mgrid[0:h, 0:w]
+    r = np.hypot(xx - w / 2, yy - h / 2) / h
+    rng = np.random.default_rng(2)
+    img[(r > 0.12) & (r < 0.3) & (rng.random((h, w)) < share)] = (20, 20, 200)
+    if dot:
+        img[r < 0.03] = (20, 20, 220)
+    return cv2.resize(img, (W, H), interpolation=cv2.INTER_NEAREST)
+
+
+def test_hit_direction_arcs_count_and_red_dot_does_not():
+    s = health_stage()
+    assert not s.process(0, arcs(0.0))["hit"]                     # red-dot sight alone: no hit
+    out = s.process(2, arcs(0.04))
+    assert out["hit"] and out["damage"] > 0.5
+
+
+def test_health_drops_fast_recovers_slowly():
+    s = health_stage(recover_s=1.5, every_n=2)
+    s.process(0, scene(edge_red=0.07))
+    assert s.health == pytest.approx(0.0, abs=0.01)
+    for i in range(1, 46):                                         # 1.5 s at 60 fps / 2
+        out = s.process(2 * i, scene())
+    assert out["health"] == pytest.approx(1 - math.exp(-1), abs=0.05)
+
+
+def test_recover_when_hurt_until_health_back():
+    agent = make_agent()
+    hp = lambda v: {"health": v}
+    d = feed(agent, [{"objects": [person(1, 6.0)], "health": hp(1.0)}] * 4)
+    assert d[-1].state.startswith("ENGAGE")
+    d = feed(agent, [{"objects": [person(1, 6.0)], "health": hp(0.2)}] * 2, start=4)
+    assert d[-1].state == "RECOVER" and d[-1].action.forward == -1.0 and not d[-1].action.fire
+    assert "health 20%" in d[-1].reason
+    d = feed(agent, [{"objects": [person(1, 6.0)], "health": hp(0.5)}] * 10, start=6)
+    assert all(x.state == "RECOVER" for x in d)                    # 50% isn't back above 60% yet
+    d = feed(agent, [{"objects": [person(1, 6.0)], "health": hp(0.7)}] * 10, start=16)
+    assert d[-1].state.startswith("ENGAGE")
+
+
+def test_recover_on_any_hit_for_two_seconds():
+    agent = make_agent()
+    hit = {"health": 0.98, "hit": True}
+    feed(agent, [{"objects": [person(1, 6.0)], "health": {"health": 1.0, "hit": False}}] * 4)
+    d = feed(agent, [{"objects": [person(1, 6.0)], "health": hit}], start=4)       # one small hit
+    assert d[0].state == "RECOVER" and not d[0].action.fire and "hit 0 ms ago" in d[0].reason
+    calm = [{"objects": [person(1, 6.0)], "health": {"health": 0.99, "hit": False}} for _ in range(3 * FPS)]
+    d = feed(agent, calm, start=5)
+    states = [x.state for x in d]
+    assert states.index(next(x for x in states if x != "RECOVER")) == pytest.approx(2.0 * FPS, abs=2)
+    assert states[-1].startswith("ENGAGE")
+
+
+def test_recover_on_hit_can_be_turned_off():
+    agent = make_agent(recover_on_hit=False)
+    feed(agent, [{"objects": [person(1, 6.0)], "health": {"health": 1.0, "hit": False}}] * 4)
+    d = feed(agent, [{"objects": [person(1, 6.0)], "health": {"health": 0.9, "hit": True}}], start=4)
+    assert d[0].state.startswith("ENGAGE")                         # 90% is above low_health

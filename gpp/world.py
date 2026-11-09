@@ -8,7 +8,11 @@ The agent never reads raw detections. This module turns them into stable facts:
             agent can search for them instead of forgetting them on the first missed frame.
             With the motion stage (gpp/adapters/motion.py), remembered targets are moved by
             the camera's turn each frame, so their screen position and angle stay on the
-            spot where the NPC was, instead of freezing on the screen while the view turns
+            spot where the NPC was, instead of freezing on the screen while the view turns.
+            For up to predict_s they also keep moving the way the NPC was last moving.
+- motion:   each visible target's angular velocity in the world (deg/s): its change in screen
+            angle plus the camera's turn, smoothed. Used to carry lost targets forward and
+            for aim lead
 - self:     ammo from the HUD text, and how blocked the path ahead looks from the depth map
 
 Angles: pinhole camera with the game's horizontal FOV. fx = (W/2) / tan(hfov/2), square
@@ -57,6 +61,10 @@ class WorldConfig:
     use_depth_distance: bool = True  # distance from calibrated depth when possible (see module doc)
     standing_aspect: float = 2.0     # box h/w at least this: whole standing person, used to calibrate depth
     depth_scale_alpha: float = 0.1   # smoothing of the depth scale over frames
+    rate_alpha: float = 0.3          # smoothing of each target's angular velocity
+    max_rate_dps: float = 120.0      # clamp: faster readings are box jitter, not movement
+    min_rate_samples: int = 3        # velocity is trusted after this many consecutive frames
+    predict_s: float = 0.5           # carry a lost target's movement forward this long
 
 
 @dataclass
@@ -78,20 +86,25 @@ class Target:
     depth_rel: Optional[float] = None
     dist_box_m: Optional[float] = None
     dist_depth_m: Optional[float] = None
+    yaw_rate: float = 0.0            # world angular velocity, deg/s (+ = moving right)
+    pitch_rate: float = 0.0          # deg/s (+ = moving up)
+    rate_samples: int = 0            # consecutive frames the velocity is built from
 
     def to_dict(self):
         r = lambda v: round(v, 1) if v is not None else None
         return {"id": self.id, "yaw": round(self.yaw_err, 2), "pitch": round(self.pitch_err, 2),
                 "aim_px": [round(self.aim[0]), round(self.aim[1])], "dist_m": r(self.distance_m),
                 "dist_box": r(self.dist_box_m), "dist_depth": r(self.dist_depth_m),
-                "range": self.range, "visible": self.visible}
+                "range": self.range, "visible": self.visible,
+                "rate": [round(self.yaw_rate, 1), round(self.pitch_rate, 1)]}
 
 
 @dataclass
 class SelfState:
     ammo: Optional[int] = None       # rounds in the magazine, None = not read
     reserve: Optional[int] = None
-    health: Optional[float] = None   # 0..1, None = not read (no health stage yet)
+    health: Optional[float] = None   # 0..1, None = not read (no health stage)
+    last_hit: Optional[float] = None # time of the last hit (seconds), None = no hit yet
     blocked: dict = field(default_factory=dict)  # {"left": 0..1, "centre": .., "right": ..}
 
 
@@ -189,6 +202,8 @@ class WorldBuilder:
         self.last_text = None
         self.depth_scale = None      # k in depth_rel = k / dist, calibrated from standing targets
         self.last_motion = None
+        self.last_health = None
+        self.last_hit = None
 
     def angles(self, x, y):
         yaw = math.degrees(math.atan((x - self.width / 2) / self.fx))
@@ -223,15 +238,34 @@ class WorldBuilder:
         return (self.width / 2 + self.fx * math.tan(math.radians(yaw)),
                 self.height / 2 - self.fx * math.tan(math.radians(pitch)))
 
-    def follow_camera(self, tr, dyaw, dpitch):
-        """Move a remembered target by the camera's turn: the view turned right, so it is now further left."""
-        tr.yaw_err = max(-85.0, min(85.0, tr.yaw_err - dyaw))
-        tr.pitch_err = max(-85.0, min(85.0, tr.pitch_err - dpitch))
+    def move_remembered(self, tr, dyaw, dpitch):
+        """Shift a remembered target's angle from the crosshair by (dyaw, dpitch) and re-project it."""
+        tr.yaw_err = max(-85.0, min(85.0, tr.yaw_err + dyaw))
+        tr.pitch_err = max(-85.0, min(85.0, tr.pitch_err + dpitch))
         nx, ny = self.to_screen(tr.yaw_err, tr.pitch_err)
         sx, sy = nx - tr.aim[0], ny - tr.aim[1]
         tr.aim = (nx, ny)
         x1, y1, x2, y2 = tr.box
         tr.box = (x1 + sx, y1 + sy, x2 + sx, y2 + sy)
+
+    def rate(self, prev, yaw, pitch, camera, t):
+        """World angular velocity of a visible target, from its previous frame (deg/s), smoothed."""
+        cfg = self.cfg
+        dt = 1.0 / self.fps
+        if prev is None or not prev.visible or t - prev.last_seen > 1.5 * dt:
+            # new, or back after a gap: no fresh sample, keep what we knew
+            return (prev.yaw_rate, prev.pitch_rate, 0) if prev else (0.0, 0.0, 0)
+        cam_yaw, cam_pitch = camera if camera is not None else (0.0, 0.0)
+        # on screen it moved by (yaw - prev); the camera's own turn hid cam_yaw of its movement
+        raw_yaw = (yaw - prev.yaw_err + cam_yaw) / dt
+        raw_pitch = (pitch - prev.pitch_err + cam_pitch) / dt
+        m = cfg.max_rate_dps
+        raw_yaw, raw_pitch = max(-m, min(m, raw_yaw)), max(-m, min(m, raw_pitch))
+        if prev.rate_samples == 0:
+            return raw_yaw, raw_pitch, 1
+        a = cfg.rate_alpha
+        return ((1 - a) * prev.yaw_rate + a * raw_yaw, (1 - a) * prev.pitch_rate + a * raw_pitch,
+                prev.rate_samples + 1)
 
     def calibrate_depth(self, kept):
         """Update k (depth_rel = k / dist) from detections that look like whole standing people."""
@@ -282,7 +316,9 @@ class WorldBuilder:
                 dist_depth = self.depth_scale / depth_rel
             distance = dist_depth if dist_depth is not None else dist_box
             prev = self.tracks.get(tid)
+            yaw_rate, pitch_rate, samples = self.rate(prev, yaw, pitch, camera, t)
             target = Target(
+                yaw_rate=yaw_rate, pitch_rate=pitch_rate, rate_samples=samples,
                 id=tid, box=tuple(obj["box"]), aim=aim, yaw_err=yaw, pitch_err=pitch, width_deg=width_deg,
                 distance_m=distance, range=range_class(distance, prev.range if prev else None, cfg),
                 conf=obj.get("conf", 1.0), first_seen=prev.first_seen if prev else t, last_seen=t,
@@ -301,8 +337,13 @@ class WorldBuilder:
                 del self.tracks[tid]  # forgotten, or never confirmed
             else:
                 tr.visible = False
-                if camera is not None:
-                    self.follow_camera(tr, *camera)
+                # the view turned right -> it's further left; and it keeps moving as it was, for a while
+                dyaw, dpitch = (-camera[0], -camera[1]) if camera is not None else (0.0, 0.0)
+                if tr.rate_samples >= cfg.min_rate_samples and t - tr.last_seen <= cfg.predict_s:
+                    dyaw += tr.yaw_rate / self.fps
+                    dpitch += tr.pitch_rate / self.fps
+                if dyaw or dpitch:
+                    self.move_remembered(tr, dyaw, dpitch)
 
         text = results.get("text")
         if text is not None and text is not self.last_text:  # text runs every Nth frame: parse new results only
@@ -311,7 +352,13 @@ class WorldBuilder:
         if self.ammo_t is not None and t - self.ammo_t > cfg.ammo_expiry_s:
             self.ammo, self.ammo_t = (None, None), None  # stale: better unknown than wrong
 
-        me = SelfState(ammo=self.ammo[0], reserve=self.ammo[1],
+        health = results.get("health")
+        if health is not None and health is not self.last_health:  # health runs every 2nd frame
+            self.last_health = health
+            if health.get("hit"):
+                self.last_hit = t
+        me = SelfState(last_hit=self.last_hit,ammo=self.ammo[0], reserve=self.ammo[1],
+                       health=health["health"] if health else None,
                        blocked=blocked_ahead(depth) if depth is not None else {})
         confirmed = [tr for tr in self.tracks.values() if tr.frames_seen >= cfg.min_frames_seen]
         return WorldState(index=index, t=t, width=self.width, height=self.height, targets=confirmed, me=me,

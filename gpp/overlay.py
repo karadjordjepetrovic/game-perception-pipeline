@@ -84,6 +84,8 @@ def draw_agent(out, decision, world):
              f"move {a.forward:+.1f} {a.strafe:+.1f}  look {a.yaw:+.1f} {a.pitch:+.1f}  {' '.join(flags)}"]
     if world.me.ammo is not None:
         lines[-1] += f"  ammo {world.me.ammo}"
+    if world.me.health is not None:
+        lines[-1] += f"  hp {world.me.health:.0%}"
     y = 12
     for i, line in enumerate(lines):
         size = 0.9 if i == 0 else 0.6

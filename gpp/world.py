@@ -37,6 +37,8 @@ from typing import Optional
 
 import numpy as np
 
+from .cover import find_cover
+
 NEAR, MID, FAR = "near", "mid", "far"
 _AMMO_RE = re.compile(r"^\s*(\d{1,3})\s*(?:[/|]\s*(\d{1,4}))?\s*$")
 
@@ -65,6 +67,8 @@ class WorldConfig:
     max_rate_dps: float = 120.0      # clamp: faster readings are box jitter, not movement
     min_rate_samples: int = 3        # velocity is trusted after this many consecutive frames
     predict_s: float = 0.5           # carry a lost target's movement forward this long
+    cover_max_m: float = 8.0         # cover: obstacles at eye height closer than this (gpp/cover.py)
+    cover_min_width_deg: float = 3.0
 
 
 @dataclass
@@ -118,6 +122,8 @@ class WorldState:
     me: SelfState
     camera: Optional[tuple] = None   # (yaw, pitch) the view turned this frame, degrees; None = unknown
     has_motion: bool = False         # a motion stage is running: remembered targets follow the camera
+    covers: list = field(default_factory=list)  # gpp.cover.Cover objects in view
+    fx: float = 0.0                  # focal length in pixels (pinhole camera)
 
     def visible_foes(self, assume_foe=True):
         return [t for t in self.targets if t.visible and (t.foe if t.foe is not None else assume_foe)]
@@ -361,5 +367,10 @@ class WorldBuilder:
                        health=health["health"] if health else None,
                        blocked=blocked_ahead(depth) if depth is not None else {})
         confirmed = [tr for tr in self.tracks.values() if tr.frames_seen >= cfg.min_frames_seen]
+        covers = []
+        if depth is not None:
+            covers = find_cover(depth, self.width, self.height, self.fx, self.depth_scale,
+                                exclude_boxes=[o["box"] for o, _, _ in kept], max_m=cfg.cover_max_m,
+                                min_width_deg=cfg.cover_min_width_deg)
         return WorldState(index=index, t=t, width=self.width, height=self.height, targets=confirmed, me=me,
-                          camera=camera, has_motion=motion is not None)
+                          camera=camera, has_motion=motion is not None, covers=covers, fx=self.fx)

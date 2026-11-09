@@ -2,7 +2,8 @@
 
 Top level, highest priority first:
 
-    RECOVER   hit (or health low): back off, no shooting   (needs the health stage)
+    RECOVER   hit (or health low): no shooting; walk to the safest cover in view while
+              aiming at the threat, then crouch (gpp/cover.py); back off if there's none
     RELOAD    magazine empty, or low with no close threat  (runs for reload_s once started)
     ENGAGE    a confirmed foe is visible
       ├─ APPROACH  target far: move toward it, keep the aim roughly on it
@@ -50,6 +51,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
+from ..cover import choose_hide
 from ..world import FAR, NEAR, WorldState
 from .actions import Action
 
@@ -79,6 +81,9 @@ class AgentConfig:
     recover_s: float = 2.0           # ... for this long after the last hit
     low_health: float = 0.3          # also RECOVER below this health ...
     recover_until: float = 0.6       # ... until it is back above this
+    use_cover: bool = True           # RECOVER walks to cover (else just backs off)
+    cover_offset_m: float = 1.0      # hide this far behind the cover object
+    cover_arrive_m: float = 0.75     # this close to the hiding spot: crouch and hold
     explore_turn_dps: float = 90.0
     search_overshoot_deg: float = 10.0
     target_policy: str = "closest"   # "closest" or "score"
@@ -99,9 +104,13 @@ class Decision:
     action: Action
     target: Optional[int]
     reason: str
+    cover: Optional[object] = None   # gpp.cover.HideChoice while taking cover
 
     def to_dict(self):
-        return {"state": self.state, "action": self.action.to_dict(), "target": self.target, "reason": self.reason}
+        d = {"state": self.state, "action": self.action.to_dict(), "target": self.target, "reason": self.reason}
+        if self.cover is not None:
+            d["cover"] = {**self.cover.cover.to_dict(), "covered": self.cover.covered, "threats": self.cover.threats}
+        return d
 
 
 def _clamp(v, lo, hi):
@@ -200,11 +209,12 @@ class FpsStateMachine:
         self.frames_in_mode += 1
         handler = {RECOVER: self.recover, RELOAD: self.reload, ENGAGE: self.engage,
                    SEARCH: self.search, EXPLORE: self.explore}[self.mode]
+        self.cover = None
         action, target, reason = handler(w)
         if self.mode != desired:
             reason += f" (holding {self.mode}, wants {desired}: {why})"
         state = f"{self.mode}.{self.sub}" if self.sub else self.mode
-        return Decision(state, action, target, reason)
+        return Decision(state, action, target, reason, cover=self.cover)
 
     def enter(self, mode, w):
         if self.mode == ENGAGE and mode == SEARCH:
@@ -225,6 +235,29 @@ class FpsStateMachine:
 
     # --- states ----------------------------------------------------------------------------
     def recover(self, w):
+        c = self.cfg
+        if w.me.last_hit is not None and w.t - w.me.last_hit < c.recover_s:
+            why = f"hit {(w.t - w.me.last_hit) * 1000:.0f} ms ago"
+        else:
+            why = f"health {w.me.health:.0%}" if w.me.health is not None else "low health"
+        threats = w.visible_foes(self.assume_foe) + w.lost_foes(self.assume_foe)
+        nearest = min(threats, key=lambda t: t.distance_m) if threats else None
+        look = self.look(nearest.yaw_err, nearest.pitch_err) if nearest else (0.0, 0.0)
+        choice = choose_hide(w.covers, [(t.yaw_err, t.distance_m) for t in threats],
+                             offset_m=c.cover_offset_m) if c.use_cover else None
+        if choice is not None:
+            self.cover = choice
+            cv = choice.cover
+            side = "right" if cv.yaw > 0 else "left"
+            obj = f"object {abs(cv.yaw):.0f}° {side} ~{cv.dist_m:.1f} m" + ("" if cv.metric else " (assumed)")
+            blocks = f"blocks {choice.covered}/{choice.threats} threats" if choice.threats else "no threat seen"
+            hx, hz = choice.hide
+            if choice.dist_m <= c.cover_arrive_m:
+                return (Action(yaw=look[0], pitch=look[1], crouch=True, move_to=choice.hide),
+                        nearest.id if nearest else None, f"{why}: in cover behind {obj}, crouched ({blocks})")
+            return (Action(forward=hz / choice.dist_m, strafe=hx / choice.dist_m, yaw=look[0], pitch=look[1],
+                           move_to=choice.hide), nearest.id if nearest else None,
+                    f"{why}: taking cover behind {obj}, {choice.dist_m:.1f} m to go ({blocks})")
         b = w.me.blocked
         strafe = 0.0
         if b:
@@ -234,7 +267,8 @@ class FpsStateMachine:
         else:
             hp = f"health {w.me.health:.0%}" if w.me.health is not None else "low health"
         side = "" if not strafe else (" and strafing left" if strafe < 0 else " and strafing right")
-        return Action(forward=-1.0, strafe=strafe), None, f"{hp}: backing off{side} to recover"
+        return (Action(forward=-1.0, strafe=strafe, yaw=look[0], pitch=look[1]), nearest.id if nearest else None,
+                f"{hp}: no cover in view, backing off{side}")
 
     def reload(self, w):
         starting = self.frames_in_mode == 1

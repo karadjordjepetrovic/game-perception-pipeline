@@ -38,6 +38,7 @@ class DecisionAgent:
             record = {"frame": index, "t": round(world.t, 3), **decision.to_dict(),
                       "world": {"targets": [t.to_dict() for t in world.targets], "ammo": world.me.ammo,
                                 "health": round(world.me.health, 2) if world.me.health is not None else None,
+                                "covers": [c.to_dict() for c in world.covers],
                                 "blocked": {k: round(v, 2) for k, v in world.me.blocked.items()}}}
             self.log.write(json.dumps(record) + "\n")
         return {"decision": decision, "world": world}

@@ -107,6 +107,7 @@ stage results ──► WorldBuilder (gpp/world.py) ──► state machine (gpp
 - **Camera motion** (`motion` stage, added automatically with `--agent`): phase correlation between consecutive frames, on a band that skips the HUD and the weapon, gives how far the view turned (~1.5 ms, CPU). Remembered targets are moved by that turn each frame, so a lost NPC's position (the ring on the overlay) stays where the NPC was instead of freezing on the screen, and SEARCH turns toward it.
 - **NPC movement**: each target's world angular velocity (its screen movement plus the camera's turn, smoothed). A lost NPC keeps moving the way it was for up to 0.5 s, and the agent leads moving targets by 0.05 s (`lead_s`; no lead below 10°/s, which is mostly box jitter).
 - **Hits and health** (`health` stage, added with `--agent`): red pixels at the screen edges (CoD's damage tint) and in a ring around the crosshair (hit-direction arcs), each minus the red elsewhere in the frame, so red scenes cancel out; the crosshair centre is ignored because a red-dot sight is always red. ~2 ms on every 2nd frame. Any hit sends the agent to RECOVER (back off, no shooting) for 2 s after the last hit (`recover_on_hit`, `recover_s`); low health (< 30%) also does, until it's back above 60%.
+- **Cover** (`gpp/cover.py`): in a band around eye height, anything close in the depth map that isn't a person counts as a cover object (crate, wall corner, car), with metric distance once the depth scale is calibrated. In RECOVER the agent picks the hiding spot behind a cover object on the far side from the threats (top-down geometry), preferring a short walk, skipping objects under 0.6 m wide or right next to a threat, and checking the object really blocks each threat. It walks there while aiming at the nearest threat and crouches on arrival; with no cover in view it backs off. Cover objects are drawn green on the overlay (thick = chosen).
 
 ```powershell
 python -m gpp run footage/mw2.mp4 --stages depth,objects,text --text-csv stages/text/outputs/hud/classified.csv --text-step 12 --agent --tag agent
@@ -128,6 +129,7 @@ gpp/adapters/      one wrapper per stage
 gpp/world.py       WorldState: targets, memory, ammo, free space, from the stage results
 gpp/adapters/motion.py  camera motion (yaw/pitch per frame)
 gpp/adapters/health.py  health from the red damage vignette
+gpp/cover.py       cover objects from depth, choosing where to hide
 gpp/agent/         decision agent: state machine, actions, JSONL log
 stages/            the three projects (git subtree)
 tests/             pipeline tests with dummy stages, no GPU needed

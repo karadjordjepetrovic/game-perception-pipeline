@@ -16,6 +16,7 @@ class Action:
     jump: bool = False
     aim_px: Optional[tuple] = None   # target's aim point on screen (x, y), when aiming at one
     aim_deg: Optional[tuple] = None  # its offset from the crosshair (yaw + right, pitch + up)
+    move_to: Optional[tuple] = None  # where it's walking to, metres (x right, z forward), e.g. a hiding spot
 
     def to_dict(self):
         d = {"move": [round(self.forward, 2), round(self.strafe, 2)],
@@ -25,4 +26,6 @@ class Action:
         if self.aim_px is not None:
             d["aim"] = {"px": [round(self.aim_px[0]), round(self.aim_px[1])],
                         "deg": [round(self.aim_deg[0], 2), round(self.aim_deg[1], 2)]}
+        if self.move_to is not None:
+            d["move_to"] = [round(self.move_to[0], 2), round(self.move_to[1], 2)]
         return d

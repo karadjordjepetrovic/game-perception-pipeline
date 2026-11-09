@@ -1,4 +1,5 @@
 """Draws every stage's latest result on the frame and writes the overlay video."""
+import math
 import cv2
 import numpy as np
 
@@ -70,6 +71,14 @@ def draw_agent(out, decision, world):
             cv2.rectangle(out, (x1, y1), (x2, y2), colour, 4)
             cv2.line(out, (cx, cy), (int(t.aim[0]), int(t.aim[1])), colour, 1, cv2.LINE_AA)
             cv2.circle(out, (int(t.aim[0]), int(t.aim[1])), 5, colour, -1)
+
+    if world.fx:  # cover objects in view (thin), the chosen one (thick) with its hiding spot direction
+        chosen = decision.cover.cover if decision.cover is not None else None
+        y1, y2 = int(0.38 * h), int(0.62 * h)
+        for cv_ in world.covers:
+            x1 = int(w / 2 + world.fx * math.tan(math.radians(cv_.yaw_left)))
+            x2 = int(w / 2 + world.fx * math.tan(math.radians(cv_.yaw_right)))
+            cv2.rectangle(out, (x1, y1), (x2, y2), (60, 220, 60), 4 if cv_ is chosen else 1)
 
     a = decision.action
     scale = 8.0  # pixels per degree of turn this tick

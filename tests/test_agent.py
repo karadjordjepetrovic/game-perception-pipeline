@@ -548,3 +548,94 @@ def test_recover_on_hit_can_be_turned_off():
     feed(agent, [{"objects": [person(1, 6.0)], "health": {"health": 1.0, "hit": False}}] * 4)
     d = feed(agent, [{"objects": [person(1, 6.0)], "health": {"health": 0.9, "hit": True}}], start=4)
     assert d[0].state.startswith("ENGAGE")                         # 90% is above low_health
+
+
+# --- cover from depth --------------------------------------------------------------------------
+from gpp.cover import Cover, choose_hide, find_cover  # noqa: E402
+
+
+def wall_depth(objects, k=100.0, far=200.0, size=(270, 480)):
+    """Depth map (inverse depth k / dist) with obstacles at eye height: list of (yaw_left, yaw_right, dist)."""
+    d = np.full(size, k / far, dtype=np.float32)
+    h, w = size
+    for yl, yr, dist in objects:
+        x1 = int((W / 2 + FX * math.tan(math.radians(yl))) * w / W)
+        x2 = int((W / 2 + FX * math.tan(math.radians(yr))) * w / W)
+        d[int(0.3 * h):int(0.7 * h), max(0, x1):x2 + 1] = k / dist
+    return d
+
+
+def test_find_cover_metric_and_skips_people():
+    d = wall_depth([(-30, -15, 4.0), (8, 16, 3.0), (20, 35, 20.0)])
+    covers = find_cover(d, W, H, FX, depth_scale=100.0)
+    assert len(covers) == 2                                      # the far one is no cover
+    left = covers[0]
+    assert left.yaw_left == pytest.approx(-30, abs=1.0) and left.yaw_right == pytest.approx(-15, abs=1.0)
+    assert left.dist_m == pytest.approx(4.0, rel=0.02) and left.metric
+    npc = person(1, 3.0, yaw_deg=12.0)
+    covers = find_cover(d, W, H, FX, depth_scale=100.0, exclude_boxes=[npc["box"]])
+    assert len(covers) == 1 and covers[0].yaw < 0                # the close thing at 12° was a person
+
+
+def test_find_cover_without_scale_uses_closest_columns():
+    d = wall_depth([(-20, -5, 3.0)])
+    covers = find_cover(d, W, H, FX, depth_scale=None)
+    assert len(covers) == 1 and not covers[0].metric and covers[0].dist_m == 3.0
+
+
+def test_hide_spot_is_behind_cover_away_from_threat():
+    crate = Cover(yaw=0.0, yaw_left=-10.0, yaw_right=10.0, dist_m=4.0, metric=True)   # 4 m ahead, ~1.4 m wide
+    choice = choose_hide([crate], threats=[(0.0, 15.0)])          # threat straight ahead behind it
+    hx, hz = choice.hide
+    assert hx == pytest.approx(0.0, abs=0.01) and hz == pytest.approx(3.0, abs=0.01)  # 1 m in front of the crate
+    assert choice.covered == 1
+
+
+def test_skips_thin_cover_and_cover_next_to_threat():
+    pole = Cover(yaw=40.0, yaw_left=37.0, yaw_right=43.0, dist_m=2.0, metric=True)        # 0.2 m wide
+    by_threat = Cover(yaw=-4.0, yaw_left=-8.0, yaw_right=0.0, dist_m=19.0, metric=True)   # 1 m from it
+    good = Cover(yaw=-5.0, yaw_left=-15.0, yaw_right=5.0, dist_m=5.0, metric=True)
+    choice = choose_hide([pole, by_threat, good], threats=[(-5.0, 20.0)])
+    assert choice.cover is good and choice.covered == 1
+
+
+def test_closer_cover_to_the_side_wins_when_it_also_blocks():
+    side = Cover(yaw=60.0, yaw_left=50.0, yaw_right=70.0, dist_m=2.5, metric=True)    # ~0.9 m wide box
+    ahead = Cover(yaw=-5.0, yaw_left=-15.0, yaw_right=5.0, dist_m=5.0, metric=True)
+    choice = choose_hide([side, ahead], threats=[(-5.0, 20.0)])
+    assert choice.cover is side and choice.covered == 1          # behind the box the threat is blocked too
+    assert choice.dist_m < 3.0
+
+
+def test_uncovered_threat_costs_more_than_walking():
+    near_but_open = Cover(yaw=80.0, yaw_left=70.0, yaw_right=89.0, dist_m=1.5, metric=True)
+    far_good = Cover(yaw=-5.0, yaw_left=-15.0, yaw_right=5.0, dist_m=6.0, metric=True)
+    better = choose_hide([near_but_open, far_good], threats=[(-5.0, 20.0), (85.0, 1.0)])  # one right at the near box
+    assert better.cover is far_good
+
+
+def test_recover_walks_to_cover_aiming_at_threat_then_crouches():
+    agent = make_agent()
+    threat = person(1, 15.0, yaw_deg=0.0)
+    depth = wall_depth([(-25, -5, 3.0)])
+    # calibrate the depth scale from the standing threat: its area must read k / 15
+    d = depth.copy()
+    x1, y1, x2, y2 = threat["box"]
+    sy, sx = d.shape[0] / H, d.shape[1] / W
+    d[int(y1 * sy):int(y2 * sy) + 1, int(x1 * sx):int(x2 * sx) + 1] = 100.0 / 15.0
+    frames = [{"objects": [threat], "depth": d, "health": {"health": 1.0, "hit": False}}] * 4
+    feed(agent, frames)
+    hit = {"objects": [threat], "depth": d, "health": {"health": 0.9, "hit": True}}
+    dec = feed(agent, [hit], start=4)[0]
+    assert dec.state == "RECOVER" and dec.cover is not None and not dec.action.fire
+    assert dec.action.strafe < 0                                   # cover is to the left
+    assert dec.action.move_to is not None and "taking cover" in dec.reason
+    log = dec.to_dict()
+    assert log["cover"]["threats"] == 1 and "move_to" in log["action"]
+
+
+def test_recover_without_cover_backs_off():
+    agent = make_agent()
+    feed(agent, [{"objects": [person(1, 8.0)], "health": {"health": 1.0, "hit": False}}] * 4)
+    dec = feed(agent, [{"objects": [person(1, 8.0)], "health": {"health": 0.9, "hit": True}}], start=4)[0]
+    assert dec.state == "RECOVER" and dec.action.forward == -1.0 and "no cover" in dec.reason

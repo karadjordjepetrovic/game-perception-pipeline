@@ -36,7 +36,7 @@ def gpu_sync():
     return lambda: None
 
 
-def run(reader, stages, info, warmup=20, sync=True, on_frame=None):
+def run(reader, stages, info, warmup=20, sync=True, on_frame=None, agents=()):
     """Run every stage on every frame (respecting each stage's every_n).
 
     warmup:   the first N frames are left out of the timing (CUDA start-up, engine caches).
@@ -45,11 +45,14 @@ def run(reader, stages, info, warmup=20, sync=True, on_frame=None):
     on_frame: called as on_frame(index, frame, latest_results) after each frame, e.g. to
               draw and write the overlay video. Its time is not in the stage timings,
               but it is in wall-clock FPS, so benchmark without it.
+    agents:   run after the stages on every frame, as agent.process(index, latest_results):
+              they consume the stages' results instead of the frame (e.g. gpp.agent.DecisionAgent).
+              Timed like stages, so decision cost shows up in the same table.
     """
-    for stage in stages:
+    for stage in [*stages, *agents]:
         stage.setup(info)
     sync_fn = gpu_sync() if sync else (lambda: None)
-    latest = {stage.name: None for stage in stages}
+    latest = {stage.name: None for stage in [*stages, *agents]}
     result = RunResult(warmup=warmup)
     wall_start = None
     try:
@@ -67,6 +70,11 @@ def run(reader, stages, info, warmup=20, sync=True, on_frame=None):
                 sync_fn()
                 if stage.timed:
                     stage_ms[stage.name] = (time.perf_counter() - t0) * 1000
+            for agent in agents:
+                t0 = time.perf_counter()
+                latest[agent.name] = agent.process(index, dict(latest))
+                if getattr(agent, "timed", True):
+                    stage_ms[agent.name] = (time.perf_counter() - t0) * 1000
             total_ms = (time.perf_counter() - frame_start) * 1000
             if index >= warmup:
                 result.timings.append(FrameTiming(index, stage_ms, total_ms))
@@ -76,6 +84,6 @@ def run(reader, stages, info, warmup=20, sync=True, on_frame=None):
             sync_fn()
             result.wall_seconds = time.perf_counter() - wall_start
     finally:
-        for stage in stages:
+        for stage in [*stages, *agents]:
             stage.close()
     return result

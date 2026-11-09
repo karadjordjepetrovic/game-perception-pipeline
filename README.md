@@ -90,11 +90,42 @@ python -m gpp run footage/mw2.mp4 --stages depth,objects,text --text-csv stages/
 
 Results are appended to `outputs/bench.csv`; overlay videos go to `outputs/`.
 
+## Decision agent
+
+`--agent` adds a decision agent after the stages: one first-person-shooter input decision per frame (move, look, fire, aim down sights, reload), from the stages' results.
+
+```
+stage results ──► WorldBuilder (gpp/world.py) ──► state machine (gpp/agent/fsm.py) ──► action + reason ──► JSONL log, overlay
+```
+
+- **WorldBuilder** turns raw detections into stable facts: each confirmed track's aim error in degrees (pinhole camera with the in-game FOV, `--hfov`), distance from box height (Depth Anything gives relative depth, not metres), a near / mid / far class with hysteresis, short memory of lost targets, ammo read from HUD text, and how blocked the path ahead is from the depth map.
+- **State machine**, highest priority first: `RECOVER` (low health) · `RELOAD` · `ENGAGE` (`APPROACH` far targets, `ACQUIRE` = turn onto the target, `FIRE` in bursts) · `SEARCH` (turn toward where a target was lost) · `EXPLORE`. Higher-priority states take over at once; lower ones need a minimum dwell time, and FIRE has an entry/exit hysteresis, so noisy per-frame perception doesn't make it flicker.
+- **Look control** is a proportional controller with a time constant and a turn-rate cap, so it behaves the same at 30 and 60 fps.
+- **Distance** fuses two estimates: box height (metric, but a crouching or half-hidden target reads too far) and depth (Depth Anything's relative inverse depth, which pose and cover don't change). The depth scale is calibrated every frame from targets that look like whole standing people, then applied to all of them. `--no-depth-distance` uses box height only.
+- **Target choice** (`--target-policy`): `closest` (default) picks the nearest foe and only switches to one at least 20% closer; `score` mixes closeness, distance from the crosshair and stickiness.
+- **Aim** (`--aim`): `smooth` (default) turns gradually and fires once on target, for driving a real game; `snap` turns the whole error and shoots in the same tick ("shoot #126 at (1012, 488)"), which suits recorded footage where the crosshair never follows the agent. Every ENGAGE action logs the target's screen point and angle (`"aim": {"px": [...], "deg": [...]}`). During short detection gaps the agent keeps aiming at the last position.
+- **Camera motion** (`motion` stage, added automatically with `--agent`): phase correlation between consecutive frames, on a band that skips the HUD and the weapon, gives how far the view turned (~1.5 ms, CPU). Remembered targets are moved by that turn each frame, so a lost NPC's position (the ring on the overlay) stays where the NPC was instead of freezing on the screen, and SEARCH turns toward it.
+
+```powershell
+python -m gpp run footage/mw2.mp4 --stages depth,objects,text --text-csv stages/text/outputs/hud/classified.csv --text-step 12 --agent --tag agent
+```
+
+Each frame is one line in `outputs/<clip>_<tag>_actions.jsonl`:
+
+```json
+{"frame": 1240, "t": 20.67, "state": "ENGAGE.ACQUIRE", "action": {"move": [0.0, 0.0], "look": [3.1, -0.4], "fire": false, "ads": true, "reload": false, "crouch": false, "jump": false}, "target": 7, "reason": "#7 mid ~14m, 4.2° right: aligning (err 4.3° > 1.2°)", "world": {...}}
+```
+
+Limits for now: there is no friend-or-foe stage, so every person counts as a foe; there is no health stage, so `RECOVER` never triggers; on recorded footage the loop is open (the agent's turns don't change the next frame), so each decision is "what to do given this frame".
+
 ## Layout
 
 ```
 gpp/               pipeline: video input, Stage interface, timing, report, overlay, CLI
 gpp/adapters/      one wrapper per stage
+gpp/world.py       WorldState: targets, memory, ammo, free space, from the stage results
+gpp/adapters/motion.py  camera motion (yaw/pitch per frame)
+gpp/agent/         decision agent: state machine, actions, JSONL log
 stages/            the three projects (git subtree)
 tests/             pipeline tests with dummy stages, no GPU needed
 ```

@@ -36,6 +36,10 @@ def draw(frame, results, inset_scale=0.3):
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
         cv2.putText(out, f"#{obj['id']}", (x1, max(16, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2)
 
+    agent = results.get("agent")
+    if agent:
+        draw_agent(out, agent["decision"], agent["world"])
+
     # depth inset last, so boxes never draw over it
     depth = results.get("depth")
     if depth is not None:
@@ -45,6 +49,48 @@ def draw(frame, results, inset_scale=0.3):
         cv2.putText(out, "depth", (w - iw, 8 + ih - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
     return out
+
+
+STATE_COLOURS = {"ENGAGE": (40, 40, 230), "SEARCH": (0, 190, 255), "RELOAD": (230, 160, 40),
+                 "RECOVER": (200, 60, 200), "EXPLORE": (90, 200, 90)}  # BGR
+
+
+def draw_agent(out, decision, world):
+    """Decision agent: state and reason (top left), selected target, intended look as an arrow from the centre."""
+    h, w = out.shape[:2]
+    cx, cy = w // 2, h // 2
+    colour = STATE_COLOURS.get(decision.state.split(".")[0], (255, 255, 255))
+
+    for t in world.targets:
+        if not t.visible:  # remembered: a small ring where it was last seen
+            cv2.circle(out, (int(t.aim[0]), int(t.aim[1])), 10, (0, 190, 255), 2)
+    for t in world.targets:
+        if t.visible and t.id == decision.target:
+            x1, y1, x2, y2 = (int(v) for v in t.box)
+            cv2.rectangle(out, (x1, y1), (x2, y2), colour, 4)
+            cv2.line(out, (cx, cy), (int(t.aim[0]), int(t.aim[1])), colour, 1, cv2.LINE_AA)
+            cv2.circle(out, (int(t.aim[0]), int(t.aim[1])), 5, colour, -1)
+
+    a = decision.action
+    scale = 8.0  # pixels per degree of turn this tick
+    tip = (int(cx + a.yaw * scale), int(cy - a.pitch * scale))
+    if tip != (cx, cy):
+        cv2.arrowedLine(out, (cx, cy), tip, colour, 3, cv2.LINE_AA, tipLength=0.3)
+    if a.fire:
+        cv2.circle(out, (cx, cy), 18, (0, 0, 255), 3)
+
+    flags = [n for n in ("fire", "ads", "reload", "crouch", "jump") if getattr(a, n)]
+    lines = [decision.state, decision.reason,
+             f"move {a.forward:+.1f} {a.strafe:+.1f}  look {a.yaw:+.1f} {a.pitch:+.1f}  {' '.join(flags)}"]
+    if world.me.ammo is not None:
+        lines[-1] += f"  ammo {world.me.ammo}"
+    y = 12
+    for i, line in enumerate(lines):
+        size = 0.9 if i == 0 else 0.6
+        (tw, th), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, size, 2)
+        cv2.rectangle(out, (8, y), (16 + tw, y + th + 12), (0, 0, 0), -1)
+        cv2.putText(out, line, (12, y + th + 5), cv2.FONT_HERSHEY_SIMPLEX, size, colour if i == 0 else (255, 255, 255), 2)
+        y += th + 16
 
 
 class OverlayWriter:
